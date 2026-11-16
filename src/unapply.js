@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { removeAuxPatches, removePatch, isPatched } from './patch.js';
-import { BRIDGE_PORT, findWorker, localDir, RUN_KEY, RUN_VALUE } from './paths.js';
+import { BRIDGE_PORT, findWorker, localDir, RUN_KEY, RUN_VALUE, workerSearchHint } from './paths.js';
 
 function checkSyntax(file) {
   const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
@@ -34,7 +34,7 @@ function stopBridge() {
 
 const worker = findWorker();
 if (!worker) {
-  console.error('找不到千问办公的 worker 运行时；可能未安装或安装目录已变化。');
+  console.error('找不到千问办公的 worker 运行时；可能未安装或安装目录已变化。\n' + workerSearchHint());
   process.exit(1);
 }
 

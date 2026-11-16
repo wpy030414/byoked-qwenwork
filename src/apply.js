@@ -3,7 +3,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { applyAuxPatches, applyPatch } from './patch.js';
-import { BRIDGE_PORT, findWorker, localDir, RUN_KEY, RUN_VALUE } from './paths.js';
+import { BRIDGE_PORT, findWorker, localDir, RUN_KEY, RUN_VALUE, workerSearchHint } from './paths.js';
 
 function checkSyntax(file) {
   const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
@@ -53,7 +53,7 @@ function warnIfAppRunning() {
 
 const worker = findWorker();
 if (!worker) {
-  console.error('找不到千问办公的 worker 运行时；请确认已安装千问办公。');
+  console.error('找不到千问办公的 worker 运行时；请确认已安装千问办公。\n' + workerSearchHint());
   process.exit(1);
 }
 
