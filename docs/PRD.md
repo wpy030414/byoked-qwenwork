@@ -1,54 +1,27 @@
-# PRD — 千问办公换芯计划（Backend → Claude Code）
+# PRD：千问办公本地 BYOK 模型桥
 
-## 为什么要做，以及要做什么？
+## 背景
+千问办公 2.1.0 在 BYOK 模型对话时把推理请求发往 Qoder 网关，服务端按账号权限返回 403（`You do not have access to this model service`）。客户端的 BYOK 校验接口与 `allow_byok` 状态都无法改变服务端裁决。
 
-### 产品目标
+## 目标
+1. 让 BYOK 模型的对话请求直接访问用户在 `agents.db` 中登记的模型端点。
+2. 用户只需执行 `pnpm apply` / `pnpm unapply`，两条命令互为逆操作。
+3. 应用后从任意正常入口启动千问办公即可工作，不需要专用启动脚本或环境变量。
+4. 不修改 `app.asar`，不伪造账号状态，不依赖 MITM 证书。
 
-让主人继续使用千问办公的界面与办公工作流，但其 Agent 后端（任务执行、工具调用、文件操作、计费）**完全由 Claude Code 承担**。用户感知：UI 不变，能干的事变多、执行质量变高、成本可见。
+## 非目标
+- 破解账号或云端策略。
+- Web 管理界面或模型编辑界面（模型编辑已在客户端可用）。
+- 多用户、远程部署或跨机器同步。
 
-### 用户与使用场景
+## 用户流程
+1. 在千问办公中添加并保存 BYOK 模型。
+2. 在项目目录执行 `pnpm apply`。
+3. 正常启动千问办公，新建对话并选择 `byok-` 模型，确认能收到回复。
+4. 需要还原时执行 `pnpm unapply`，之后应用恢复官方行为。
 
-- 用户：主人本人（单机、单用户）。
-- 场景：
-  1. 在千问办公对话框下发任务（整理文档、做表格/PPT、处理 PDF、跨应用办事），期待更强工具链与更可靠执行。
-  2. 需要 Claude Code 生态的能力：主人已有的 MCP 服务器（如钉钉 DWS 系列）、skills、hooks、权限配置直接可用。
-  3. 需要清晰计费：每次任务实际花多少，从 Claude 侧台账可见。
-
-### 核心问题
-
-千问办公是 Electron 应用，其本地 Agent 引擎为「qoder CLI（Claude Code CLI 的 fork）+ 协议 SDK」。要在不改 UI、不改 asar 的前提下，把引擎进程整体替换为 Claude Code CLI，并在两层协议差异之间做翻译。
-
-### 功能及其存在的意义
-
-| 功能 | 实现文件 | 意义 |
-|---|---|---|
-| Bridge shim（Node 翻译层） | `src/bridge-shim.mjs` | 承接 SDK 的 spawn 参数与 JSONL 流，翻译为 claude 协议，双向改写 |
-| macOS shell wrapper | `src/bridge-shim-wrapper.sh` | 绕过 SDK PATH 限制，探测 node 绝对路径 |
-| 控制协议应答 | `src/bridge-shim.mjs` | 应答 SDK 的 `control_request`（initialize/get_models/get_context_usage/generate_session_title/interrupt 等），保证 UI 不崩 |
-| 内部查询自答 | `src/bridge-shim.mjs` | 模型列表/闲置建议等内部查询本地合成应答，不消耗 token |
-| 会话 ID 直通 | `src/bridge-shim.mjs` | `--session-id`/`--resume` 原样传给 claude，多轮上下文连续 |
-| 技能复用 | 手动操作 | 千问内置 SKILL.md（docx/pptx/xlsx/pdf 等）复制进 `~/.claude/skills/`，Claude 直接调用 |
-| 成本台账 | `src/bridge-shim.mjs` | 每次运行 `result.total_cost_usd` 追加到 `~/.qwenwork-bridge/ledger.jsonl`，主人可查每次任务花费 |
-| 注册/撤销工具 | `src/index.mjs` | `pnpm apply`/`pnpm unapply` 一键注册/撤销 `QODER_CLI_PATH` + `QODERCLI_PATH` 两个环境变量（跨平台） |
-
-### 功能之间的关系
-
-```
-千问办公 UI
-   └─ 主进程 main.js ── QODER_CLI_PATH 挂点
-        └─ src/bridge-shim.mjs（本工程）
-             ├─ 参数翻译 → claude
-             ├─ 事件/控制协议翻译 ← claude stream-json
-             ├─ 内部查询自答（省 token）
-             └─ 成本台账
-```
-
-### 产品范围与 Non-Goals
-
-范围：shim、注册工具、文档、成本台账。
-Non-Goals：
-
-- 不改 UI / 不重新打包千问办公。
-- 不移植 qoder 云端能力（ImageGen、ImageSearch、云端技能市场）。
-- 不实现多用户 / 团队计费。
-- 不绕过千问办公登录与 Claude 计费（都走既有通道）。
+## 验收标准
+- `pnpm apply` 后 worker 含固定桥地址，登录自启动项存在，桥在 `127.0.0.1:17895` 监听。
+- 不设置任何环境变量、不使用专用脚本，正常启动应用后可完成一轮 BYOK 对话。
+- `pnpm unapply` 后 worker 恢复原始锚点，自启动项删除，桥进程停止，本地桥目录清理；此前已有的其它 worker 补丁不受影响。
+- `pnpm apply` 的补丁语法自检通过。

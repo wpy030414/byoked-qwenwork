@@ -1,9 +1,21 @@
 {
-  "name": "clauded-qwenwork",
+  "name": "byoked-qwenwork",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "description": "千问办公本地 BYOK 模型桥",
   "scripts": {
-    "apply": "node src/index.mjs apply",
-    "unapply": "node src/index.mjs unapply"
-  }
+    "apply": "node src/apply.js",
+    "unapply": "node src/unapply.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "keywords": [
+    "qwenwork",
+    "byok",
+    "custom-models",
+    "bridge"
+  ],
+  "license": "MIT"
 }
