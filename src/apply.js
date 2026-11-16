@@ -3,7 +3,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { applyAuxPatches, applyPatch } from './patch.js';
-import { BRIDGE_PORT, findWorker, localDir, RUN_KEY, RUN_VALUE, workerSearchHint } from './paths.js';
+import { BRIDGE_PORT, BYOK_ENV_KEY, deviceEnvPath, findWorker, localDir, RUN_KEY, RUN_VALUE, workerSearchHint } from './paths.js';
 
 function checkSyntax(file) {
   const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
@@ -51,6 +51,75 @@ function warnIfAppRunning() {
   } catch {}
 }
 
+function splitLines(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+function envLineValue(line) {
+  const raw = line.slice(line.indexOf('=') + 1).trim();
+  const unquoted = raw.replace(/^(['"])(.*)\1$/, '$2');
+  const comment = unquoted.indexOf(' #');
+  return (comment >= 0 ? unquoted.slice(0, comment) : unquoted).trim();
+}
+
+function isTruthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
+// 2.1.0 的 BYOK 门禁在 app.asar 主进程里：allowCustomBYOK =
+// 环境变量 ALLOW_CUSTOM_BYOK 为真，或账号 allow_byok >= 2。
+// 应用启动时会读取设备目录的 .env，因此在这里写入该键，不改 app.asar。
+function enableByokEnv() {
+  const file = deviceEnvPath();
+  let existing = null;
+  try {
+    existing = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  const created = existing === null;
+  const lines = splitLines(existing ?? '');
+  const index = lines.findIndex((line) => /^\s*ALLOW_CUSTOM_BYOK\s*=/.test(line));
+  let previousLine = null;
+  let changed = false;
+  if (index >= 0) {
+    if (!isTruthyEnv(envLineValue(lines[index]))) {
+      previousLine = lines[index];
+      lines[index] = `${BYOK_ENV_KEY}=1`;
+      changed = true;
+    }
+  } else {
+    lines.push(`${BYOK_ENV_KEY}=1`);
+    changed = true;
+  }
+  if (changed) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, lines.join('\n') + '\n', 'utf8');
+    console.log('已启用自定义模型门禁：' + file + '（' + BYOK_ENV_KEY + '=1）');
+  } else {
+    console.log('自定义模型门禁已开启：' + file);
+  }
+  return { file, owned: changed, created, previousLine };
+}
+
+// 记录本工具写入的 .env 键，unapply 时只撤销自己负责的部分。
+function saveEnvState(dir, byokEnv) {
+  const file = path.join(dir, 'state.json');
+  let state = {};
+  try {
+    state = JSON.parse(fs.readFileSync(file, 'utf8')) || {};
+  } catch {}
+  const prior = state.byokEnv;
+  state.byokEnv = byokEnv.owned
+    ? byokEnv
+    : prior && prior.file === byokEnv.file && prior.owned
+      ? prior
+      : { file: byokEnv.file, owned: false };
+  fs.writeFileSync(file, JSON.stringify(state, null, 2) + '\n', 'utf8');
+}
+
 const worker = findWorker();
 if (!worker) {
   console.error('找不到千问办公的 worker 运行时；请确认已安装千问办公。\n' + workerSearchHint());
@@ -79,6 +148,8 @@ if (patched !== original) {
 
 const dir = localDir();
 fs.mkdirSync(dir, { recursive: true });
+const byokEnv = enableByokEnv();
+saveEnvState(dir, byokEnv);
 const bridgeSource = new URL('../scripts/byok-model-bridge.cjs', import.meta.url);
 const bridgeTarget = path.join(dir, 'byok-model-bridge.cjs');
 fs.copyFileSync(bridgeSource, bridgeTarget);

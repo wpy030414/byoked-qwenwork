@@ -103,6 +103,16 @@ export function localDir() {
   return path.join(base, 'byoked-qwenwork-bridge');
 }
 
+// 千问办公启动时读取设备目录下的 .env（loadQoderDotEnv），
+// 其中 ALLOW_CUSTOM_BYOK 是主进程启用自定义模型门禁的本地开关。
+export const BYOK_ENV_KEY = 'ALLOW_CUSTOM_BYOK';
+
+export function deviceEnvPath() {
+  if (process.env.QWENWORK_DEVICE_ENV) return process.env.QWENWORK_DEVICE_ENV;
+  const dir = process.env.QWENWORK_DEVICE_DIR || path.join(os.homedir(), '.qwenworkcn');
+  return path.join(dir, '.env');
+}
+
 export function agentsDbPath() {
   if (process.env.QWENWORK_AGENTS_DB) return process.env.QWENWORK_AGENTS_DB;
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');

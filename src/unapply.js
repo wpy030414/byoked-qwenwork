@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { removeAuxPatches, removePatch, isPatched } from './patch.js';
-import { BRIDGE_PORT, findWorker, localDir, RUN_KEY, RUN_VALUE, workerSearchHint } from './paths.js';
+import { BRIDGE_PORT, BYOK_ENV_KEY, findWorker, localDir, RUN_KEY, RUN_VALUE, workerSearchHint } from './paths.js';
 
 function checkSyntax(file) {
   const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
@@ -29,6 +29,46 @@ function stopBridge() {
       execFileSync('taskkill', ['/PID', pid, '/F'], { stdio: 'ignore' });
       console.log('已停止桥接进程 PID ' + pid);
     } catch {}
+  }
+}
+
+function splitLines(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+// 只撤销 apply 自己写入或改写的那一行，保留用户 .env 中的其它内容。
+function restoreByokEnv() {
+  const statePath = path.join(localDir(), 'state.json');
+  let state = null;
+  try {
+    state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  } catch {
+    return;
+  }
+  const record = state && state.byokEnv;
+  if (!record || !record.owned || !record.file) return;
+  let text;
+  try {
+    text = fs.readFileSync(record.file, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return;
+    throw e;
+  }
+  const lines = splitLines(text);
+  const pattern = new RegExp('^\\s*' + BYOK_ENV_KEY + '\\s*=');
+  const index = lines.findIndex((line) => pattern.test(line));
+  if (index < 0) return;
+  if (record.previousLine) lines[index] = record.previousLine;
+  else lines.splice(index, 1);
+  const content = lines.length ? lines.join('\n') + '\n' : '';
+  if (!content && record.created) {
+    fs.rmSync(record.file, { force: true });
+    console.log('已删除本工具创建的设备 .env：' + record.file);
+  } else {
+    fs.writeFileSync(record.file, content, 'utf8');
+    console.log('已撤销自定义模型门禁覆盖：' + record.file);
   }
 }
 
@@ -72,6 +112,12 @@ try {
 }
 
 stopBridge();
+
+try {
+  restoreByokEnv();
+} catch (e) {
+  console.error('撤销自定义模型门禁失败：' + e.message);
+}
 
 const dir = localDir();
 try {

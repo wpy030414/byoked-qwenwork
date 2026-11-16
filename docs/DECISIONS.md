@@ -130,7 +130,7 @@
 - 状态：已实现并验证
 - 背景（遇到了什么问题）：ADR-006～009 已证明服务端会在模型推理链路上对 BYOK 请求返回 403。静态分析和运行日志进一步确认：BYOK 路由固定为 `harness:"qoder-cli"`，worker 收到 `custom_model` 后仍走 legacy 网关（`sendRemoteChatAsk`），请求体由 WASM 签名/加密，无法在 MITM 层翻译成自有端点请求。
 - 决策：在解包 worker 的 legacy 推理发送点加入一个分支：当请求带 `custom_model` 时，不再构造网关请求，而是从 `A.messages`、`A.custom_model.model`、`A.custom_model.parameters.api_key` 直接构造标准 OpenAI `chat/completions` 请求，发往硬编码的本机桥 `http://127.0.0.1:17895/v1/chat/completions`。桥接 `scripts/byok-model-bridge.cjs` 按模型名从 `agents.db` 查上游 URL，带原 `Authorization` 头转发，并把 SSE 流原样返回。
-- 交付方式：`pnpm apply` 负责注入 BYOK 校验补丁（`vkn` 恒真、`allow_byok=2`）与桥接补丁、把桥复制到 `%LOCALAPPDATA%/byoked-qwenwork-bridge`、注册 `HKCU` 登录自启动并立即启动桥；`pnpm unapply` 负责回滚补丁、删除自启动、停止桥并清理文件。两条命令互为逆操作，不依赖环境变量或专用启动脚本。
+- 交付方式：`pnpm apply` 负责注入 BYOK 校验补丁（`vkn` 恒真、`allow_byok=2`）与桥接补丁、把桥复制到 `%LOCALAPPDATA%/byoked-qwenwork-bridge`、注册 `HKCU` 登录自启动并立即启动桥；`pnpm unapply` 负责回滚补丁、删除自启动、停止桥并清理文件。两条命令互为逆操作，不依赖外部启动环境变量或专用启动脚本。（2026-11-16 晚修订：2.1.0 主进程的 BYOK 门禁改用设备 `.env` 的 `ALLOW_CUSTOM_BYOK=1` 打开，见 ADR-012；仍然不需要外部启动环境变量。）
 - 为什么选这个：只替换模型传输层，会话/提示词/流式解析仍由官方 worker 负责；不改 `app.asar`（避开完整性校验），不伪造账号或服务端策略，不依赖 MITM 证书，也不需要解密 worker 的请求体；正常入口启动即可生效。
 - 为什么不选其他：改 asar 改路由会导致应用无法启动；MITM 只能拦 check/config，拦不到已加密的推理请求；强制 `allow_byok` 不影响网关裁决；opencode 直连需要改主进程连接策略，范围更大；专用启动脚本或环境变量不符合「无感」要求。
 - 验证方式：用与主进程相同的 SDK 启动参数做探针，补丁后桥接收到标准 OpenAI 请求并返回真实回复；随后在不设置任何环境变量、不使用专用脚本的情况下正常启动千问办公，新建对话、选择 `Hy 4 Flash` 发送消息，界面返回真实模型回复，桥日志显示上游返回 200。`pnpm apply` 重复执行幂等；`pnpm unapply` 后桥进程停止、自启动与补丁均消失，再次 `apply` 可恢复。
@@ -150,3 +150,15 @@
 - 验证方式：桥级测试覆盖 OpenAI 透传图片、Anthropic 请求转换（system、base64 图片、URL 图片下载、tools、tool_use/tool_result、角色合并）与 SSE 转换（文本、reasoning、tool_calls、finish_reason、usage）；worker 分支单测覆盖消息/图片/工具/参数保留与请求头。真实应用重启后附带一张金门大桥照片提问，桥日志显示 `images=8` 与 `image_url` part，界面返回了对照片内容的准确描述。
 - 后果：模型编辑里未勾选「图片支持」的 BYOK 模型仍按文字占位处理；Anthropic 上游不主动开启 thinking，音频只对 OpenAI 透传；远程图片会先下载并内联（上限 10 MB）。
 - 回滚：执行 `pnpm unapply`，视觉保留补丁与桥接补丁一并移除。
+
+## ADR-012：用设备 .env 打开 2.1.0 主进程的 BYOK 门禁（已实测可用）
+- 日期：2026-11-16
+- 状态：已采纳
+- 背景（遇到了什么问题）：`pnpm apply` 后 worker 补丁、视觉补丁、桥与自启动都正常，但千问办公里没有自定义模型请求到达桥（桥日志只有监听行）。主日志显示 `[AuthManager] Resolved BYOK access {"source":"auth_manager_cache","allowBYOK":0,"envAllowsCustomByok":false,"allowCustomBYOK":false}`，且 `agents.db.byok_custom_models` 为空。静态分析 2.1.0 的 `out/main/main.js`：`AuthStatusService` 用 `hasCustomByokEnvOverride() || (getUserStatus()?.allowBYOK ?? 0) >= 2` 决定 `allowCustomBYOK`；前者读取进程环境或设备目录 `.env` 的 `ALLOW_CUSTOM_BYOK` / `ALLOW_BYOK`。worker 里的 `vkn` 与 `allow_byok` 补丁只覆盖旧路径，无法影响主进程门禁。
+- 考虑过的方案：改 `app.asar` 主进程常量；改 `.status.json` 的 `allow_byok`；在启动器里注入外部环境变量；使用应用自带设备 `.env` 的 `ALLOW_CUSTOM_BYOK=1`。
+- 决策：使用设备 `.env`。`apply` 在 `%USERPROFILE%\.qwenworkcn\.env` 写入或改写 `ALLOW_CUSTOM_BYOK=1`，并把归属记入本地桥目录 `state.json`；`unapply` 只撤销本工具写入的这一行（恢复原值或删除），文件由本工具创建且删键后为空时删除文件。模型记录仍由 `byok_custom_models` 提供，桥不写模型表。
+- 为什么选这个：这是应用自身支持的本地配置读取路径（`loadQoderDotEnv` + `hasCustomByokEnvOverride`），不触碰 `app.asar`（避开完整性校验），不需要专用启动脚本，`unapply` 可精确回滚；改动只有一行配置。
+- 为什么不选其他：改 `app.asar` 会触发打包完整性校验（ADR-007 已验证无法启动）；`.status.json` 不是 AuthManager 的实时来源且会被覆盖；外部环境变量需要改注册表或启动器，违背“无感启动”要求。
+- 后果：`apply` 会新增或修改设备 `.env` 的一行；若官方升级改名或移除该开关，门禁会失效，需要同步 `BYOK_ENV_KEY`。自定义模型设置页签仍受 profile 策略控制；本 ADR 只保证已登记的模型出现在选择器并走直连桥。
+- 验证方式：写入后重启应用，主日志变为 `envAllowsCustomByok:true, allowCustomBYOK:true`；模型选择器出现 `agents.db` 中的自定义模型；发送消息后桥日志出现 `REQ model=claude-sonnet-5 ... style=anthropic upstreams=2` 与 `UPSTREAM .../v1/messages anthropic 200`，界面返回真实回复。`apply` 重复执行不重复写键；`unapply` 后 `.env` 被删除、worker 补丁/自启动/桥/本地目录全部清理；再次 `apply` 可恢复。
+- 何时重新审视：官方改变 BYOK 门禁实现，或开放稳定的自定义模型管理入口。
